@@ -1,19 +1,19 @@
 #!/bin/bash
 # (C) Copyright 2021-2022,2024 Hewlett Packard Enterprise Development LP
 #
-# This script will repack Debian .ISO file for a GLM
-# Debian install service that uses Virtual Media
+# This script will repack Ubuntu/Debian .ISO file for a GLM
+# Ubuntu/Debian install service that uses Virtual Media
 # to get the install started.
 
-# The following changes are being made to the Debian .ISO:
+# The following changes are being made to the Ubuntu/Debian .ISO:
 #   (1) configure to use a preseed file on the iLO vmedia-cd
 #   (2) setup for a text based install (versus a GUI install)
 #   (3) set up the console to the iLO serial port (/dev/ttyS1)
 
-# The Debian .ISO is configured to use a preseed file on the iLO
+# The Ubuntu/Debian .ISO is configured to use a preseed file on the iLO
 # vmedia-cd by adding the 'inst.ks=hd:sr0:/hpe-preseed.cfg.template' option in
 # GRUB (used in UEFI) and isolinux (used in BIOS) configuration
-# files. This option configures Debian installer to pull the
+# files. This option configures Ubuntu/Debian installer to pull the
 # preseed file from the root of the cdrom at /hpe-preseed.cfg.template.  This
 # preseed option is setup by modifying the following files
 # on the .ISO:
@@ -21,12 +21,19 @@
 #   EFI/BOOT/grub.cfg for UEFI
 
 # Usage:
-#  hpe-iso-build.sh -i <debian.iso> -o <hpe-customizied-debian.iso>
+#  hpe-iso-build.sh -i <distro.iso> -o <hpe-custom-distro.iso>
 
 # command line options            | Description
 # ------------------------------- | -----------
-# -i <debian.iso>                 | Input Debian .ISO filename
-# -o <hpe-customizied-debian.iso> | Output GLM Debian .ISO file
+# -i <distro.iso>                 | Input Ubuntu/Debian .ISO filename
+# -o <hpe-custom-distro.iso>      | Output GLM Ubuntu/Debian .ISO file
+# -n <distro-name>                | Distro Name: Ubuntu or Debian
+
+# TODO This script is unusual.  In order to inject the hpe-preseed_setup.cfg
+# file into the .iso, it does (mount iso ... cp preseed ... xorriso).  But then
+# right after that it uses another technique to update the UEFI configuration
+# file (xorriso -extract ${UEFI_CFG_FILE} ... xorriso -update ${UEFI_CFG_FILE}).
+# We should use one technique or the other but not both!
 
 set -exuo pipefail
 
@@ -37,7 +44,7 @@ if [ "$EUID" -ne 0 ]
 fi
 
 # check to make sure we have the required tools called within this script
-for i in xorriso implantisomd5
+for i in xorriso implantisomd5 md5sum aptly wget
 do
   which $i > /dev/null 2>&1
   if [ $? -ne 0 ]
@@ -56,8 +63,9 @@ fi
 UEFI_ORIG_CFG_FILE=""
 INPUT_ISO_FILENAME=""
 CUSTOM_ISO_FILENAME=""
+DISTRO_NAME=""
 # parse command line parameters
-while getopts "i:o:" opt
+while getopts "i:o:n:" opt
 do
     case $opt in
         i) INPUT_ISO_FILENAME=$OPTARG
@@ -68,11 +76,12 @@ do
             fi
             ;;
         o) CUSTOM_ISO_FILENAME=$OPTARG ;;
+        n) DISTRO_NAME=${OPTARG^^} ;;
     esac
 done
 
-if [ -z "$INPUT_ISO_FILENAME" -o -z "$CUSTOM_ISO_FILENAME" ]; then
-   echo "Usage: $0 -i <debian.iso> -o <hpe-customizied-debian.iso>"
+if [ -z "$INPUT_ISO_FILENAME" -o -z "$CUSTOM_ISO_FILENAME" -o -z "$DISTRO_NAME" ]; then
+   echo "Usage: $0 -i <distro.iso> -o <hpe-custom-distro.iso> -n <distro-name>"
    exit 1
 fi
 
@@ -83,37 +92,73 @@ YYYYMMDD=$(date '+%Y%m%d')
 # Unpack the OS .ISO, inject the files, and pack it again
 #   Inject following files:
 #     1. hpe-preseed_setup.cfg
-mkdir -p /media/debian/
+MNT_POINT=/media/$DISTRO_NAME/
+mkdir -p $MNT_POINT
 mkdir -p /tmp/custom_iso
 ls -lrt $INPUT_ISO_FILENAME
 md5sum $INPUT_ISO_FILENAME
-sudo mount -t iso9660 -o loop $INPUT_ISO_FILENAME /media/debian/
-cd /media/debian/
+sudo mount -t iso9660 -o loop $INPUT_ISO_FILENAME $MNT_POINT
+cd $MNT_POINT
 tar cf - . | (cd /tmp/custom_iso; tar xfp -)
 ls -lrt /tmp/custom_iso/
 cd -
 sudo cp hpe-preseed_setup.cfg /tmp/custom_iso/
-sudo umount /media/debian/
+sudo umount $MNT_POINT
+
+if [ "${DISTRO_NAME^^}" == "DEBIAN" ]; then
+
 xorriso -as mkisofs -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
   -c isolinux/boot.cat -b isolinux/isolinux.bin -no-emul-boot -boot-load-size 4 \
   -boot-info-table -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot \
   -isohybrid-gpt-basdat -o $INPUT_ISO_FILENAME /tmp/custom_iso/
+
+fi
+
+if [ "${DISTRO_NAME^^}" == "UBUNTU" ]; then
+
+# https://www.pugetsystems.com/labs/hpc/ubuntu-22-04-server-autoinstall-iso/
+
+# I got this xorriso incantation from Step 5) Generate a new Ubuntu 22.04 server autoinstall ISO
+# of the article with a few modifications
+
+# But I did not do Step 2) Unpack files and partition images from the Ubuntu 22.04 live server ISO
+
+# TODO find a complete working solution
+
+xorriso -as mkisofs -r \
+  --grub2-mbr ../BOOT/1-Boot-NoEmul.img \
+  -partition_offset 16 \
+  --mbr-force-bootable \
+  -append_partition 2 28732ac11ff8d211ba4b00a0c93ec93b ../BOOT/2-Boot-NoEmul.img \
+  -appended_part_as_gpt \
+  -iso_mbr_part_type a2a0d0ebe5b9334487c068b6b72699c7 \
+  -c '/boot.catalog' \
+  -b '/boot/grub/i386-pc/eltorito.img' \
+    -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info \
+  -eltorito-alt-boot \
+  -e '--interval:appended_partition_2:::' \
+  -no-emul-boot \
+  -isohybrid-gpt-basdat -o $INPUT_ISO_FILENAME /tmp/custom_iso/
+
+fi
+
 ls -lrt $INPUT_ISO_FILENAME
 md5sum $INPUT_ISO_FILENAME
 sudo rm -rf /tmp/custom_iso/
 
 # Locate the GRUB Configuration File
-UEFI_CFG_FILE=boot/grub/grub.cfg  # For Debian
+UEFI_CFG_FILE=boot/grub/grub.cfg  # For Ubuntu/Debian
 
+# extract the ${UEFI_CFG_FILE} from the .ISO
 xorriso -osirrox on -indev $INPUT_ISO_FILENAME -extract ${UEFI_CFG_FILE} ${UEFI_CFG_FILE}
 
 if [ ! -f "${UEFI_CFG_FILE}" ]; then
-  echo "did not find ${UEFI_CFG_FILE} on <sles-iso-filename>"
+  echo "did not find ${UEFI_CFG_FILE} on <distro-iso-filename>"
   exit -1
 fi
 
 # Make the extracted file writable (xorriso makes it read-only when extracted)
-chmod -R u+w boot # for Debian based OS
+chmod -R u+w boot # for Ubuntu/Debian based OS
 
 # The clean function cleans up any lingering files
 # that might be present when the script exits.
@@ -127,7 +172,7 @@ clean() {
 trap clean EXIT
 
 if [ ! -f "${UEFI_CFG_FILE}" ]; then
-  echo "did not find ${UEFI_CFG_FILE} on <debian-iso-filename>"
+  echo "did not find ${UEFI_CFG_FILE} on <distro-iso-filename>"
   exit -1
 fi
 
@@ -174,7 +219,7 @@ echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 # end the UEFI_CFG_FILE file modifications
 ###################################################
 
-# Create the Debian .ISO file
+# Create the Ubuntu/Debian .ISO file
 
 echo
 echo Creating ${CUSTOM_ISO_FILENAME}

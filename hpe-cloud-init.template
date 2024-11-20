@@ -18,6 +18,10 @@ manage_etc_hosts: true
 # ----------------------------------------------------
 users:
   - name: root
+    # Reference: https://cloudinit.readthedocs.io/en/latest/reference/examples.html
+    #   lock_passwd: Defaults to true. Lock the password to disable password login.
+    #   Set it to false to unlock the password (for root login at the serial console).
+    lock_passwd: false
 {{- if .SSHKeys }}
     ssh_authorized_keys:
   {{- range $key := .SSHKeys}}
@@ -162,7 +166,9 @@ network:
       -  {{.Name}}
       {{- end}}
       params:
-          bond-mode: 2
+          # Reference: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/configuring_and_managing_networking/configuring-network-bonding_configuring-and-managing-networking#configuring-network-bonding_configuring-and-managing-networking
+          # set bonding mode = mode 5 (balance-tlb)
+          bond-mode: balance-tlb
           bond-miimon: 100
           bond-xmit_hash_policy: 2
       {{- $vlan_parent = .Name}}
