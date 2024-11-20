@@ -31,7 +31,7 @@ This GitHub repository contains the script files, template files, and documentat
 
 Workflow for Building Image:
 
-![image](https://github.com/hpe-hcss/bmaas-byoi-debian-build/assets/90067804/e7145718-9099-4f8e-a776-a1f5f89c28c9)
+![image](https://github.com/user-attachments/assets/2d022eb0-b634-4943-a64d-2a194c2bf797)
 
 **Prerequisites:**
 ```
