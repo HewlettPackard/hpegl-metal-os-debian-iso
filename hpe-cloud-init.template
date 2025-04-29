@@ -1,5 +1,5 @@
 #cloud-config
-# (C) Copyright 2021-2024 Hewlett Packard Enterprise Development LP
+# (C) Copyright 2021-2025 Hewlett Packard Enterprise Development LP
 merge_how:
   - name:     list
     settings: [append]
@@ -18,6 +18,10 @@ manage_etc_hosts: true
 # ----------------------------------------------------
 users:
   - name: root
+    # Reference: https://cloudinit.readthedocs.io/en/latest/reference/examples.html
+    #   lock_passwd: Defaults to true. Lock the password to disable password login.
+    #   Set it to false to unlock the password (for root login at the serial console).
+    lock_passwd: false
 {{- if .SSHKeys }}
     ssh_authorized_keys:
   {{- range $key := .SSHKeys}}
@@ -79,7 +83,7 @@ write_files:
     content: |
       [Resolve]
   {{- range .Connections}}
-    {{- if gt .UntaggedNet.VID 0 }}
+    {{- if and (gt .UntaggedNet.VID 0) (eq .UntaggedNet.NoIPAddr false) }}
       {{- $net_zero := .UntaggedNet }}
       {{- $range_zero := index $net_zero.Ranges 0 }}
       {{- range $range_zero.DNS}}
@@ -92,6 +96,7 @@ write_files:
     {{- if gt (len .Networks) 0 }}
       # multiple networks with vlans
       {{- range .Networks}}
+        {{- if eq .NoIPAddr false }}
         {{- $range_zero := index .Ranges 0}}
         {{- range $range_zero.DNS}}
       DNS={{.}}
@@ -99,6 +104,7 @@ write_files:
         {{- range $range_zero.DNSSearchDomains}}
       Domains={{.}}
         {{- end}}
+        {{- end}} {{/* if eq .NoIPaddr false */}}
       {{- end}} {{/* range .Networks */}}
     {{- end}} {{/* if gt (len .Networks) 0 */}}
   {{- end}}  {{/* range .Connections  */}}
@@ -162,13 +168,15 @@ network:
       -  {{.Name}}
       {{- end}}
       params:
-          bond-mode: 2
+          # Reference: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/configuring_and_managing_networking/configuring-network-bonding_configuring-and-managing-networking#configuring-network-bonding_configuring-and-managing-networking
+          # set bonding mode = mode 5 (balance-tlb)
+          bond-mode: balance-tlb
           bond-miimon: 100
           bond-xmit_hash_policy: 2
       {{- $vlan_parent = .Name}}
   {{- end}}
 
-  {{- if gt .UntaggedNet.VID 0 }}
+  {{- if and (gt .UntaggedNet.VID 0) (eq .UntaggedNet.NoIPAddr false) }}
       {{- $net_zero := .UntaggedNet }}
       {{- $range_zero := index $net_zero.Ranges 0 }}
       subnets:
@@ -195,6 +203,7 @@ network:
       name: {{$vlan_parent}}.{{.VID}}
       vlan_link:  {{$vlan_parent}}
       vlan_id: {{.VID}}
+      {{- if eq .NoIPAddr false }}
       {{- $range_zero := index .Ranges 0}}
       subnets:
       - type: static
@@ -212,6 +221,7 @@ network:
           - {{.}}
           {{- end}}
         {{- end}}
+      {{- end}}
       {{- end}}
   {{- end}}
   {{- end}}  {{/* range .Connections  */}}
